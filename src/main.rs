@@ -1,3 +1,4 @@
+use anyhow::Result;
 use std::collections::HashMap;
 
 use phf::phf_map;
@@ -12,6 +13,8 @@ pub enum Keyword {
     Over,
     Drop,
     Swap,
+    UserCmd(String),
+    Number(i64),
 }
 
 static KEYWORDS: phf::Map<&'static str, Keyword> = phf_map! {
@@ -25,13 +28,9 @@ static KEYWORDS: phf::Map<&'static str, Keyword> = phf_map! {
     "swap" => Keyword::Swap,
 };
 
-pub fn parse_keyword(keyword: &str) -> Option<Keyword> {
-    KEYWORDS.get(keyword).cloned()
-}
-
 pub struct Evaluator {
     stack: Vec<i64>,
-    definitions: HashMap<String, Vec<String>>,
+    definitions: HashMap<String, Vec<Keyword>>,
 }
 
 impl Evaluator {
@@ -42,8 +41,21 @@ impl Evaluator {
         }
     }
 
-    pub fn process(row: impl AsRef<str>) -> Result<Vec<i64>, anyhow::Error> {
+    pub fn process(row: impl AsRef<str>) -> Result<Vec<i64>> {
         Ok(Vec::new())
+    }
+
+    pub fn parse_word(&self, word: &str) -> Result<Keyword> {
+        match self.definitions.contains_key(word) {
+            true => Ok(Keyword::UserCmd(word.into())),
+            false => match KEYWORDS.get(word) {
+                Some(kw) => Ok(kw.clone()),
+                None => word
+                    .parse::<i64>()
+                    .map(Keyword::Number)
+                    .map_err(|er| er.into()),
+            },
+        }
     }
 }
 
