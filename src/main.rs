@@ -1,6 +1,8 @@
 use anyhow::{bail, Result};
+use std::io::Write;
 use std::{
     collections::{HashMap, VecDeque},
+    io::{stdin, stdout},
     str::SplitWhitespace,
 };
 
@@ -135,7 +137,7 @@ impl Evaluator {
                 None => word
                     .parse::<i64>()
                     .map(Keyword::Number)
-                    .map_err(|e| e.into()),
+                    .or_else(|_| bail!("unknown keyword '{}'", word)),
             },
         }
     }
@@ -186,8 +188,26 @@ impl Default for Evaluator {
     }
 }
 
-fn main() {
-    println!("Here will be forth");
+fn print_ps() -> Result<()> {
+    let mut lock = stdout().lock();
+    write!(lock, "> ")?;
+    lock.flush()?;
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    let mut ev = Evaluator::new();
+    println!("Hello! I'm the forth interactive interpreter loop (aka REPL)!");
+    print_ps()?;
+    for line in stdin().lines() {
+        match ev.process(line?) {
+            Ok(stack) => println!("Stack: {:?}", stack),
+            Err(e) => println!("ERROR: {}", e),
+        };
+        print_ps()?;
+    }
+    println!("Bye!");
+    Ok(())
 }
 
 #[cfg(test)]
