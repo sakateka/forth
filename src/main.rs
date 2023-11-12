@@ -1,9 +1,12 @@
 use anyhow::{bail, Result};
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, VecDeque},
+    str::SplitWhitespace,
+};
 
 use phf::phf_map;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Keyword {
     Plus,
     Minus,
@@ -13,6 +16,8 @@ pub enum Keyword {
     Swap,
     Dup,
     Drop,
+    DefineStart,
+    DefineEnd,
     UserCmd(String),
     Number(i64),
 }
@@ -26,6 +31,8 @@ static KEYWORDS: phf::Map<&'static str, Keyword> = phf_map! {
     "over" => Keyword::Over,
     "drop" => Keyword::Drop,
     "swap" => Keyword::Swap,
+    ":" => Keyword::DefineStart,
+    ";" => Keyword::DefineEnd,
 };
 
 pub struct Evaluator {
@@ -43,7 +50,7 @@ impl Evaluator {
         let mut commands_iter = row.as_ref().split_whitespace();
 
         let mut stack = Vec::new();
-        let mut cmd_stack: Vec<Keyword> = Vec::new();
+        let mut cmd_stack = VecDeque::new();
 
         loop {
             let Some(cmd) = commands_iter.next() else {
@@ -52,25 +59,84 @@ impl Evaluator {
             let mut keyword = self.parse_word(cmd)?;
             loop {
                 match keyword {
-                    Keyword::Number(n) => {
-                        stack.push(n);
-                        break;
-                    }
+                    Keyword::Number(n) => stack.push(n),
                     Keyword::UserCmd(name) => {
                         if let Some(def) = self.definitions.get(name.as_str()) {
-                            cmd_stack.append(def.clone().as_mut());
+                            cmd_stack.extend(def.clone());
                         } else {
                             bail!("Unknown command: '{}'", name);
                         }
                     }
+                    Keyword::DefineEnd => bail!("unexpected keyword {:?}", keyword),
+                    Keyword::DefineStart => {
+                        self.parse_definition(&mut commands_iter)?;
+                    }
                     _ => self.evaluate(&mut stack, keyword)?,
                 }
-                keyword = if let Some(kw) = cmd_stack.pop() {
+                keyword = if let Some(kw) = cmd_stack.pop_front() {
                     kw
                 } else {
                     break;
                 };
             }
+        }
+    }
+
+    fn parse_definition(&mut self, commands_iter: &mut SplitWhitespace) -> Result<()> {
+        let Some(def) = commands_iter.next() else {
+            bail!("expected definition name, got EOL");
+        };
+        if let Ok(Keyword::Number(_)) = self.parse_word(def) {
+            bail!("redefinition of numbers not allowed!");
+        }
+
+        let mut commands = Vec::new();
+        let mut prev = def;
+        loop {
+            let Some(cmd) = commands_iter.next() else {
+                bail!("unexpected EOL: {}", prev);
+            };
+            prev = cmd;
+            match self.parse_word(cmd)? {
+                Keyword::DefineEnd => break,
+                Keyword::UserCmd(cmd) => {
+                    self.expand_user_defs(cmd, &mut commands);
+                }
+                kw => commands.push(kw),
+            }
+        }
+        self.definitions.insert(def.to_lowercase(), commands);
+        Ok(())
+    }
+
+    fn expand_user_defs(&mut self, cmd: String, commands: &mut Vec<Keyword>) {
+        let mut def_cmds = self.definitions.get(&cmd).unwrap().clone();
+        def_cmds.reverse();
+        loop {
+            let next = def_cmds.pop();
+            match next {
+                Some(Keyword::UserCmd(cmd)) => {
+                    let mut more_def_cmds = self.definitions.get(&cmd).unwrap().clone();
+                    more_def_cmds.reverse();
+                    def_cmds.extend(more_def_cmds);
+                }
+                Some(kw) => commands.push(kw),
+                None => break,
+            }
+        }
+    }
+
+    fn parse_word(&self, word: &str) -> Result<Keyword> {
+        let word = word.to_lowercase();
+        match self.definitions.contains_key(&word) {
+            true => Ok(Keyword::UserCmd(word)),
+            false => match KEYWORDS.get(&word) {
+                Some(kw) => Ok(kw.clone()),
+                None => word
+                    .parse::<i64>()
+                    .map(Keyword::Number)
+                    .map_err(|e| e.into()),
+            },
         }
     }
 
@@ -111,19 +177,6 @@ impl Evaluator {
             }
         }
         Ok(())
-    }
-
-    fn parse_word(&self, word: &str) -> Result<Keyword> {
-        match self.definitions.contains_key(word) {
-            true => Ok(Keyword::UserCmd(word.into())),
-            false => match KEYWORDS.get(word) {
-                Some(kw) => Ok(kw.clone()),
-                None => word
-                    .parse::<i64>()
-                    .map(Keyword::Number)
-                    .map_err(|e| e.into()),
-            },
-        }
     }
 }
 
